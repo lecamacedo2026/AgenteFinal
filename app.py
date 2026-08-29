@@ -1,127 +1,138 @@
+import base64
+import json
+import os
 import streamlit as st
-from PIL import Image
+from openai import AzureOpenAI
+from dotenv import load_dotenv
 
-from image_agent import ImageAnalysisAgent
+# Carrega variáveis do arquivo .env (caso exista localmente)
+load_dotenv()
 
+# Configuração da página do Streamlit
 st.set_page_config(
     page_title="Agente de Análise de Imagens",
     page_icon="🖼️",
-    layout="centered",
+    layout="centered"
 )
 
 st.title("🖼️ Agente de Análise de Imagens")
 st.caption("Python + Streamlit + Microsoft Foundry")
+st.write("Envie uma imagem para que o agente analise objetos, pessoas, núcleos e qualidade visual.")
 
-st.write(
-    "Envie uma imagem para que o agente analise objetos, pessoas, cores "
-    "e qualidade visual."
-)
+# ------------------------------------------------------------------------------
+# 1. Carregamento e validação das variáveis de ambiente
+# ------------------------------------------------------------------------------
+AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+# Aceita AZURE_AI_API_KEY ou FOUNDRY_API_KEY como fallback
+AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY") or os.getenv("FOUNDRY_API_KEY")
+AZURE_AI_MODEL = os.getenv("AZURE_AI_MODEL", "gpt-4o")
+
+if not AZURE_AI_API_KEY or not AZURE_AI_ENDPOINT:
+    st.error("Erro ao inicializar o agente: AZURE_AI_API_KEY ou AZURE_AI_ENDPOINT não foi definido no ambiente / arquivo .env.")
+    st.info("Confira AZURE_AI_ENDPOINT, AZURE_AI_API_KEY (ou FOUNDRY_API_KEY) e AZURE_AI_MODEL no arquivo .env ou no painel do servidor.")
+    st.stop()
 
 
-@st.cache_resource
-def load_agent():
-    return ImageAnalysisAgent()
-
-
+# ------------------------------------------------------------------------------
+# 2. Inicialização do Cliente Azure OpenAI
+# ------------------------------------------------------------------------------
 try:
-    agent = load_agent()
-except Exception as exc:
-    st.error(f"Erro ao inicializar o agente: {exc}")
-    st.info(
-        "Confira AZURE_AI_ENDPOINT, AZURE_AI_API_KEY e AZURE_AI_MODEL "
-        "no arquivo .env."
+    client = AzureOpenAI(
+        azure_endpoint=AZURE_AI_ENDPOINT,
+        api_key=AZURE_AI_API_KEY,
+        api_version="2024-02-15-preview"
     )
+except Exception as e:
+    st.error(f"Erro ao criar o cliente do Azure AI: {e}")
     st.stop()
 
 
-uploaded_file = st.file_uploader(
-    "Selecione uma imagem",
-    type=["png", "jpg", "jpeg", "webp"],
-)
+# ------------------------------------------------------------------------------
+# 3. Função de Análise de Imagem (com tratamento rigoroso contra None)
+# ------------------------------------------------------------------------------
+def analisar_imagem(image_bytes, mime_type):
+    """Envia a imagem codificada em base64 para o modelo no Azure AI e retorna um dicionário JSON."""
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    
+    prompt = """
+    Analise a imagem fornecida e retorne estritamente um JSON no seguinte formato:
+    {
+        "possui_pessoas": true/false,
+        "objetos": ["objeto1", "objeto2"],
+        "nucleos_predominantes": ["cor1", "cor2"],
+        "qualidade_visual": "Boa / Regular / Ruim",
+        "descricao": "Breve resumo descritivo da imagem"
+    }
+    """
 
-if uploaded_file is None:
-    st.info("Envie uma imagem para iniciar a análise.")
-    st.stop()
-
-image_bytes = uploaded_file.getvalue()
-mime_type = uploaded_file.type or "image/jpeg"
-
-try:
-    image = Image.open(uploaded_file)
-    width, height = image.size
-
-    st.image(
-        image,
-        caption=f"{uploaded_file.name} • {width}x{height}px",
-        use_container_width=True,
-    )
-except Exception as exc:
-    st.error(f"Não foi possível abrir a imagem: {exc}")
-    st.stop()
-
-
-if st.button(
-    "🔍 Analisar imagem com IA",
-    type="primary",
-    use_container_width=True,
-):
     try:
-        with st.spinner("Analisando imagem no Microsoft Foundry..."):
-            result = agent.analyze(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-            )
-
-        st.success("Análise concluída.")
-
-        col1, col2, col3 = st.columns(3)
-
-        possui_pessoas = result.get("possui_pessoas", False)
-
-        with col1:
-            st.metric(
-                "Pessoas",
-                "Sim" if possui_pessoas else "Não",
-            )
-
-        with col2:
-            st.metric(
-                "Quantidade",
-                result.get("quantidade_pessoas", 0),
-            )
-
-        with col3:
-            st.metric(
-                "Qualidade",
-                str(result.get("qualidade", "indeterminado")).upper(),
-            )
-
-        st.subheader("Descrição")
-        st.write(result.get("descricao", "Não informado"))
-
-        st.subheader("Elementos identificados")
-        elementos = result.get("elementos", [])
-        st.write(" • ".join(elementos) if elementos else "Nenhum")
-
-        st.subheader("Cores predominantes")
-        cores = result.get("cores_predominantes", [])
-        st.write(" • ".join(cores) if cores else "Indeterminado")
-
-        st.subheader("Avaliação técnica")
-        st.write(f"**Nitidez:** {result.get('nitidez', 'indeterminado')}")
-        st.write(f"**Iluminação:** {result.get('iluminacao', 'indeterminado')}")
-        st.write(f"**Contraste:** {result.get('contraste', 'indeterminado')}")
-        st.write(f"**Justificativa:** {result.get('reasoning', 'Não informado')}")
-
-        score = float(result.get("score", 0.0))
-        st.progress(
-            max(0, min(100, int(score * 100))),
-            text=f"Confiança da análise: {score * 100:.1f}%",
+        response = client.chat.completions.create(
+            model=AZURE_AI_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=800
         )
+        
+        content = response.choices[0].message.content
+        return json.loads(content)
 
-        with st.expander("Ver JSON retornado"):
-            st.json(result)
+    except Exception as e:
+        st.error(f"Erro ao consultar o modelo do Microsoft Foundry: {e}")
+        return None
 
-    except Exception as exc:
-        st.error("Erro ao consultar o modelo do Microsoft Foundry.")
-        st.exception(exc)
+
+# ------------------------------------------------------------------------------
+# 4. Interface da aplicação
+# ------------------------------------------------------------------------------
+uploaded_file = st.file_uploader("Escolha uma imagem...", type=["jpg", "jpeg", "png", "webp"])
+
+if uploaded_file is not None:
+    st.image(uploaded_file, caption=f"{uploaded_file.name}", use_container_width=True)
+    
+    if st.button("🔍 Analisar imagem com IA", type="primary"):
+        with st.spinner("Analisando imagem..."):
+            image_bytes = uploaded_file.getvalue()
+            mime_type = uploaded_file.type or "image/jpeg"
+            
+            # Chamada da API
+            result = analisar_imagem(image_bytes, mime_type)
+            
+            # Validação para evitar AttributeError: 'NoneType' object has no attribute 'get'
+            if result is not None and isinstance(result, dict):
+                st.success("Análise concluída.")
+                
+                # Leitura segura das chaves com .get()
+                possui_pessoas = result.get("possui_pessoas", False)
+                objetos = result.get("objetos", [])
+                nucleos = result.get("nucleos_predominantes", [])
+                qualidade = result.get("qualidade_visual", "Não informada")
+                descricao = result.get("descricao", "Sem descrição.")
+                
+                # Exibição dos resultados
+                st.subheader("Resultados da Análise")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Possui pessoas:** {'Sim' if possui_pessoas else 'Não'}")
+                    st.write(f"**Qualidade visual:** {qualidade}")
+                
+                with col2:
+                    st.write(f"**Cores predominantes:** {', '.join(nucleos) if nucleos else 'N/A'}")
+                    st.write(f"**Objetos identificados:** {', '.join(objetos) if objetos else 'N/A'}")
+                
+                st.info(f"**Descrição:** {descricao}")
+            else:
+                st.error("Não foi possível processar a imagem devido a uma falha na resposta da API.")
