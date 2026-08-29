@@ -1,8 +1,8 @@
+import os
 import base64
 import json
-import os
+import re
 from typing import Any
-
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -190,7 +190,7 @@ Classifique utilizando SOMENTE:
 
 9. SCORE
 
-O campo "score" representa a confiança geral
+O campo "score" represents a confiança geral
 da análise realizada pelo modelo.
 
 Utilize um número decimal entre 0 e 1.
@@ -436,443 +436,44 @@ class ImageAnalysisAgent:
         # ----------------------------------------------------
 
         self.client = OpenAI(
-            api_key=self.api_key,
             base_url=self.endpoint,
+            api_key=self.api_key
         )
 
-
-    # ========================================================
-    # NORMALIZA ENDPOINT
-    # ========================================================
-
-    @staticmethod
-    def _normalize_endpoint(
-        endpoint: str
-    ) -> str:
-
-        endpoint = endpoint.strip().rstrip("/")
-
-        # Caso já esteja no formato correto
-        if endpoint.endswith("/openai/v1"):
-
-            return endpoint + "/"
-
-        # Acrescenta a rota da API OpenAI v1
-        return endpoint + "/openai/v1/"
-
-
-    # ========================================================
-    # CONVERTE IMAGEM PARA BASE64
-    # ========================================================
-
-    @staticmethod
-    def _to_data_url(
-        image_bytes: bytes,
-        mime_type: str,
-    ) -> str:
-
-        encoded = base64.b64encode(
-            image_bytes
-        ).decode("utf-8")
-
-        return (
-            f"data:{mime_type};base64,{encoded}"
-        )
-
-
-    # ========================================================
-    # VALIDA RESULTADO
-    # ========================================================
-
-    @staticmethod
-    def _validate(
-        data: dict[str, Any]
-    ) -> dict[str, Any]:
-
-
-        # ----------------------------------------------------
-        # QUALIDADE
-        # ----------------------------------------------------
-
-        qualidade = str(
-            data.get(
-                "qualidade",
-                "indeterminado"
-            )
-        ).strip().lower()
-
-        if qualidade == "média":
-            qualidade = "media"
-
-        if qualidade not in {
-            "alta",
-            "media",
-            "baixa",
-            "indeterminado",
-        }:
-
-            qualidade = "indeterminado"
-
-
-        # ----------------------------------------------------
-        # PESSOAS
-        # ----------------------------------------------------
-
-        possui_pessoas = bool(
-            data.get(
-                "possui_pessoas",
-                False
-            )
-        )
-
-
-        try:
-
-            quantidade = int(
-                data.get(
-                    "quantidade_pessoas",
-                    0
-                )
-            )
-
-        except (TypeError, ValueError):
-
-            quantidade = 0
-
-
-        if not possui_pessoas:
-
-            quantidade = 0
-
-
-        quantidade = max(
-            0,
-            quantidade
-        )
-
-
-        # ----------------------------------------------------
-        # SCORE
-        # ----------------------------------------------------
-
-        try:
-
-            score = float(
-                data.get(
-                    "score",
-                    0.5
-                )
-            )
-
-        except (TypeError, ValueError):
-
-            score = 0.5
-
-
-        score = max(
-            0.0,
-            min(
-                1.0,
-                score
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # ELEMENTOS
-        # ----------------------------------------------------
-
-        elementos = data.get(
-            "elementos",
-            []
-        )
-
-        if not isinstance(
-            elementos,
-            list
-        ):
-
-            elementos = [
-                str(elementos)
-            ]
-
-
-        # ----------------------------------------------------
-        # CORES
-        # ----------------------------------------------------
-
-        cores = data.get(
-            "cores_predominantes",
-            []
-        )
-
-        if not isinstance(
-            cores,
-            list
-        ):
-
-            cores = [
-                str(cores)
-            ]
-
-
-        # ----------------------------------------------------
-        # KEYWORDS
-        # ----------------------------------------------------
-
-        keywords = data.get(
-            "keywords",
-            []
-        )
-
-        if not isinstance(
-            keywords,
-            list
-        ):
-
-            keywords = [
-                str(keywords)
-            ]
-
-
-        # ----------------------------------------------------
-        # REASONING
-        # Máximo 15 palavras
-        # ----------------------------------------------------
-
-        reasoning = str(
-            data.get(
-                "reasoning",
-                "Análise técnica não informada."
-            )
-        ).strip()
-
-
-        words = reasoning.split()
-
-
-        if len(words) > 15:
-
-            reasoning = " ".join(
-                words[:15]
-            )
-
-
-        # ----------------------------------------------------
-        # RESULTADO FINAL
-        # ----------------------------------------------------
-
-        return {
-
-            "descricao": str(
-                data.get(
-                    "descricao",
-                    "Descrição não informada."
-                )
-            ).strip(),
-
-            "possui_pessoas": possui_pessoas,
-
-            "quantidade_pessoas": quantidade,
-
-            "elementos": elementos,
-
-            "cores_predominantes": cores,
-
-            "qualidade": qualidade,
-
-            "nitidez": str(
-                data.get(
-                    "nitidez",
-                    "indeterminado"
-                )
-            ).strip(),
-
-            "iluminacao": str(
-                data.get(
-                    "iluminacao",
-                    "indeterminado"
-                )
-            ).strip(),
-
-            "contraste": str(
-                data.get(
-                    "contraste",
-                    "indeterminado"
-                )
-            ).strip(),
-
-            "score": score,
-
-            "language": "pt",
-
-            "keywords": keywords,
-
-            "reasoning": reasoning,
-        }
-
-
-    # ========================================================
-    # ANALISA A IMAGEM
-    # ========================================================
-
-    def analyze(
-        self,
-        image_bytes: bytes,
-        mime_type: str,
-    ) -> dict[str, Any]:
-
-
-        if not image_bytes:
-
-            raise ValueError(
-                "A imagem está vazia."
-            )
-
-
-        # ----------------------------------------------------
-        # CONVERTE PARA BASE64
-        # ----------------------------------------------------
-
-        data_url = self._to_data_url(
-
-            image_bytes=image_bytes,
-
-            mime_type=mime_type,
-        )
-
-
-        # ----------------------------------------------------
-        # CHAMADA AO MICROSOFT FOUNDRY
-        # ----------------------------------------------------
-
-        response = self.client.responses.create(
-
-            model=self.model,
-
-            instructions=SYSTEM_PROMPT,
-
-            input=[
-                {
-                    "type": "message",
-
-                    "role": "user",
-
-                    "content": [
-
-                        {
-                            "type": "input_text",
-
-                            "text": (
-                                "Analise cuidadosamente a imagem "
-                                "fornecida conforme todas as instruções."
-                            ),
-                        },
-
-                        {
-                            "type": "input_image",
-
-                            "image_url": data_url,
-
-                            "detail": "high",
-                        },
-                    ],
-                }
-            ],
-
-
-            # ------------------------------------------------
-            # STRUCTURED OUTPUT
-            # Obriga o modelo a retornar o JSON no schema
-            # ------------------------------------------------
-
-            text={
-                "format": {
-
-                    "type": "json_schema",
-
-                    "name": "analise_imagem",
-
-                    "strict": True,
-
-                    "schema": IMAGE_ANALYSIS_SCHEMA,
-                }
-            },
-
-
-            # ------------------------------------------------
-            # LIMITE DE SAÍDA
-            # Antes estava 1000 e o JSON foi cortado
-            # ------------------------------------------------
-
-            max_output_tokens=4000,
-        )
-
-
-        # ----------------------------------------------------
-        # VERIFICA SE A RESPOSTA FOI INTERROMPIDA
-        # ----------------------------------------------------
-
-        status = getattr(
-            response,
-            "status",
-            None
-        )
-
-
-        if status == "incomplete":
-
-            details = getattr(
-                response,
-                "incomplete_details",
-                None
-            )
-
-            raise ValueError(
-                "O Microsoft Foundry interrompeu "
-                "a resposta antes de finalizar. "
-                f"Detalhes: {details}"
-            )
-
-
-        # ----------------------------------------------------
-        # TEXTO RETORNADO
-        # ----------------------------------------------------
-
-        content = response.output_text
-
-
-        if not content:
-
-            raise ValueError(
-                "O modelo retornou uma resposta vazia. "
-                "Confirme se o deployment suporta imagens."
-            )
-
-
-        # ----------------------------------------------------
-        # CONVERTE O JSON
-        # ----------------------------------------------------
-
-        try:
-
-            parsed = json.loads(
-                content
-            )
-
-        except json.JSONDecodeError as exc:
-
-            raise ValueError(
-                "O modelo retornou um JSON inválido "
-                "ou incompleto. "
-                f"Resposta recebida: {content}"
-            ) from exc
-
-
-        # ----------------------------------------------------
-        # VALIDA E RETORNA
-        # ----------------------------------------------------
-
-        return self._validate(
-            parsed
-        )
+    def _normalize_endpoint(self, url: str) -> str:
+        """Garante que a URL termine corretamente com a rota do gateway."""
+        url_limpa = url.strip()
+        if not url_limpa.endswith("/openai/v1") and not url_limpa.endswith("/openai/v1/"):
+            if url_limpa.endswith("/"):
+                url_limpa = url_limpa + "openai/v1"
+            else:
+                url_limpa = url_limpa + "/openai/v1"
+        return url_limpa
+
+    def _limpar_resposta_json(self, texto_cru: str) -> str:
+        """Filtra wrappers Markdown da resposta."""
+        texto_limpo = texto_cru.strip()
+        texto_limpo = re.sub(r'^```json\s*', '', texto_limpo, flags=re.IGNORECASE)
+        texto_limpo = re.sub(r'^```\s*', '', texto_limpo)
+        texto_limpo = re.sub(r'\s*```$', '', texto_limpo)
+        return texto_limpo.strip()
+
+    def analyze(self, image_bytes: bytes, mime_type: str) -> dict:
+        """Converte a imagem, faz a chamada estruturada e valida a resposta."""
+        
+        # Converte os bytes em string base64 legível por IA
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        image_data_uri = f"data:{mime_type};base64,{base64_image}"
+        
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analise esta imagem estritamente conforme as regras do sistema."},
+                    {"type": "image_url", "image_url": {"url": image_data_uri}}
+                ]
+            }
+        ]
+        
+        # Injeta o SCHEMA usando o padrão estrito de JSON Object da OpenAI compatível com o Foundry
