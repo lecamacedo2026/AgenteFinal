@@ -2,7 +2,7 @@ import base64
 import json
 import os
 import streamlit as st
-from openai import AzureOpenAI
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Carrega variáveis do arquivo .env (caso exista localmente)
@@ -22,28 +22,33 @@ st.write("Envie uma imagem para que o agente analise objetos, pessoas, núcleos 
 # ------------------------------------------------------------------------------
 # 1. Carregamento e validação das variáveis de ambiente
 # ------------------------------------------------------------------------------
-AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT")
+AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT", "").strip()
 # Aceita AZURE_AI_API_KEY ou FOUNDRY_API_KEY como fallback
-AZURE_AI_API_KEY = os.getenv("AZURE_AI_API_KEY") or os.getenv("FOUNDRY_API_KEY")
-AZURE_AI_MODEL = os.getenv("AZURE_AI_MODEL", "gpt-4o")
+AZURE_AI_API_KEY = (os.getenv("AZURE_AI_API_KEY") or os.getenv("FOUNDRY_API_KEY") or "").strip()
+AZURE_AI_MODEL = os.getenv("AZURE_AI_MODEL", "gpt-4o").strip()
 
 if not AZURE_AI_API_KEY or not AZURE_AI_ENDPOINT:
-    st.error("Erro ao inicializar o agente: AZURE_AI_API_KEY ou AZURE_AI_ENDPOINT não foi definido no ambiente / arquivo .env.")
-    st.info("Confira AZURE_AI_ENDPOINT, AZURE_AI_API_KEY (ou FOUNDRY_API_KEY) e AZURE_AI_MODEL no arquivo .env ou no painel do servidor.")
+    st.error("Erro ao inicializar o agente: AZURE_AI_API_KEY (ou FOUNDRY_API_KEY) ou AZURE_AI_ENDPOINT não foi definido no ambiente / arquivo .env.")
+    st.info("Confira AZURE_AI_ENDPOINT, AZURE_AI_API_KEY e AZURE_AI_MODEL no arquivo .env ou nas variáveis do servidor.")
     st.stop()
 
+# Garantir que o endpoint termine com /openai/v1 para uso com o SDK OpenAI
+if not AZURE_AI_ENDPOINT.endswith("/openai/v1") and not AZURE_AI_ENDPOINT.endswith("/openai/v1/"):
+    if AZURE_AI_ENDPOINT.endswith("/"):
+        AZURE_AI_ENDPOINT += "openai/v1"
+    else:
+        AZURE_AI_ENDPOINT += "/openai/v1"
 
 # ------------------------------------------------------------------------------
-# 2. Inicialização do Cliente Azure OpenAI
+# 2. Inicialização do Cliente OpenAI (Compatível com Microsoft Foundry /v1)
 # ------------------------------------------------------------------------------
 try:
-    client = AzureOpenAI(
-        azure_endpoint=AZURE_AI_ENDPOINT,
-        api_key=AZURE_AI_API_KEY,
-        api_version="2024-02-15-preview"
+    client = OpenAI(
+        base_url=AZURE_AI_ENDPOINT,
+        api_key=AZURE_AI_API_KEY
     )
 except Exception as e:
-    st.error(f"Erro ao criar o cliente do Azure AI: {e}")
+    st.error(f"Erro ao criar o cliente do Azure/Foundry AI: {e}")
     st.stop()
 
 
@@ -51,7 +56,7 @@ except Exception as e:
 # 3. Função de Análise de Imagem (com tratamento rigoroso contra None)
 # ------------------------------------------------------------------------------
 def analisar_imagem(image_bytes, mime_type):
-    """Envia a imagem codificada em base64 para o modelo no Azure AI e retorna um dicionário JSON."""
+    """Envia a imagem codificada em base64 para o modelo no Microsoft Foundry e retorna um dicionário JSON."""
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     
     prompt = """
